@@ -1,45 +1,70 @@
-# Credit Default Risk & Creditworthiness Modeling with CatBoost
+# Credit Card Default Risk & Creditworthiness Modeling with CatBoost
 
-An end-to-end machine learning pipeline built to assess customer creditworthiness and identify potential defaults (30+ Days Past Due) for a retail credit card portfolio.
+This repository hosts an end-to-end machine learning pipeline built to assess retail customer creditworthiness and predict the probability of a customer falling into a **30+ DPD (Days Past Due)** default risk bucket (`Bad_label = 1`) for a credit card portfolio.
 
-## 📌 Business Problem
-Bank GoodCredit aims to proactively control its credit default risk. The goal is to predict whether an existing credit card customer will fall into the **30+ DPD (Days Past Due)** risk bucket (`Bad_label = 1`). 
+## 📌 Business Problem & Objectives
+Bank GoodCredit aims to proactively manage credit exposure and minimize financial defaults while optimizing card approvals. 
+- **Target variable (`Bad_label`):** `0` (Good credit history) or `1` (Bad credit history / 30+ DPD).
+- **Target Imbalance:** Highly imbalanced data containing only **4.2% bad cases**.
+- **Primary Metric:** **Gini Coefficient** (Project Benchmark: **37.9% Gini**).
 
-*   **Target:** `Bad_label` (0 = Good history, 1 = Bad history / 30+ DPD)
-*   **Evaluation Metric:** **Gini Coefficient** (Project Benchmark: **37.9%**)
+## 📂 Data Consolidation & Pipeline Architecture
+The raw bureau and transaction data is distributed across three source tables with multiple transaction/history logs per customer. To meet risk management modeling standards, we consolidated this into a **single analytical table containing exactly one row per customer**.
 
-## 🗃️ Data Strategy & Architecture
-The raw data is structured at a transactional/account level, containing multiple records per customer. To meet the credit risk standards, the data was consolidated into **one row per customer**.
+1.  **`Cust_Demographics` (Spine):** Application-level demographic data (1 row per customer).
+2.  **`Cust_Account` (Consolidated):** Multiple rows per customer depicting historical tradeline details, limits, and payments.
+3.  **`Cust_Enquiry` (Consolidated):** Multiple rows per customer showing historical credit-seeking behavior (enquiries).
 
-*   `Cust_Account`: Historical credit card/loan account and repayment information.
-*   `Cust_Enquiry`: Credit-seeking behavior and historical enquiry activity.
-*   `Cust_Demographics`: Anonymized customer demographic application data.
+## 🛠️ Advanced Feature Engineering & Cleaning
+*   **Timeline Alignment (Reference Anchor):** The application date (`dt_opened`) was verified as constant per customer and used as a chronological "anchor" to compute absolute recency/gap features in months.
+*   **Payment History Parsing:** Concatenated the split history strings (`paymenthistory1` and `paymenthistory2`) into a unified string. Parsed monthly 3-character bureau status codes into percentages of months spent in distinct DPD buckets (`0-29`, `30-59`, `60-89`, `90+` DPD) and months elapsed to first delinquency.
+*   **Outlier & Sentinel Neutralization:** Identified and cleaned extreme database sentinel placeholders (e.g., `999,999,999` in enquiry amounts) and corrected negative outstanding current balances to `NaN` to prevent distorting aggregate risk statistics.
+*   **Financial Ratios:** Engineered utilization metrics such as `Ratio_currbalance_creditlimit` and a dynamic capacity trend measure (`utilisation_trend`).
 
-## 🛠️ Key Feature Engineering & Cleaning
-*   **Chronological Date Conversion:** Raw timestamps parsed and translated into elapsed durations (e.g., months since oldest/latest account opened, months since last payment).
-*   **Robust Outlier Treatment:** Corrected negative current balances to prevent skewed utilization, and cleaned sentinel placeholder values (e.g., `999,999,999` in enquiry amounts) to `NaN`.
-*   **Payment History Parsing:** Concatenated multi-part payment status fields and extracted monthly DPD status trends, percentage of months current, and time to first delinquency.
+## 🤖 Why CatBoost Classifier?
+We selected **CatBoost** over other gradient boosted tree frameworks (e.g., XGBoost, LightGBM) for several key reasons:
+1.  **Native Categorical Handling:** CatBoost robustly builds target statistics on categorical columns natively, eliminating the risk of high-cardinality dimensionality explosion associated with extensive One-Hot Encoding.
+2.  **Symmetric Trees:** Symmetric trees act as a regularizer, significantly reducing overfitting tendencies on highly imbalanced targets.
+3.  **Built-In Missing Value Handling:** It natively handles missing numeric feature fields (such as unreported interest rates or limits) without needing arbitrary imputation strategies.
 
-## 🚀 Model Development & Selection
-We evaluated two core feature selection frameworks on the training split using a **5-Fold Stratified Cross-Validation** approach:
-1.  **Model-Based Feature Importance (CatBoost)**
-2.  **Information Value (IV) Analysis**
+## 🔬 Feature Selection & 5-Fold Cross-Validation
+To construct a highly predictive, parsimonious model, we evaluated two distinct feature-selection strategies using **5-Fold Stratified Cross-Validation** (to preserve the 4.2% default imbalance across folds) on the training set:
 
-**Cross-Validation Gini Results:**
-*   Model-based Top 40 features achieved a **Mean CV Gini of 35.38%**.
-*   IV-based Top 80 features achieved a **Mean CV Gini of 34.52%**.
-*   **Decision:** Selected the Top 40 Model-Based feature set for its superior generalization and compactness.
+### 1. Model-Based Feature Importance (CatBoost Gain)
+We iteratively tested various subsets based on the model's gain output. The **Top 40 features** yielded the highest performance:
+*   **Mean CV Gini:** **35.38%** (Std CV Gini: 2.67%)
+*   **Out-of-Fold (OOF) Gini:** **35.31%**
 
-## 📊 Final Performance
+### 2. Information Value (IV) Feature Selection
+We calculated the Information Value for all variables and tested corresponding Top-N feature counts. The **Top 80 features** yielded the best IV configuration:
+*   **Mean CV Gini:** **34.52%** (Std CV Gini: 2.28%)
+*   **Out-of-Fold (OOF) Gini:** **34.46%**
+
+### Decision
+The **Top 40 Model-Based feature set** was selected for final model training because it delivered a superior Gini performance with half the dimensionality of the IV approach.
+
+## 📊 Final Performance Metrics
 *   **Holdout Test AUC:** `0.6830`
-*   **Holdout Test Gini:** `36.61%` (Highly competitive, approaching the project target threshold)
+*   **Holdout Test Gini:** `36.61%` (Extremely close to the 37.90% benchmark, demonstrating high model generalization without overfitting).
 
-### Risk Rank Ordering
-Sorting the test set into risk deciles demonstrates strong rank-ordering capabilities:
-*   **Decile 10 (Highest Risk):** Bad Rate of **7.74%** (Lift: **1.84x** over the average bad rate)
-*   **Decile 1 (Lowest Risk):** Bad Rate of **0.42%**
+### Risk Rank-Ordering (Decile Table)
+By sorting customers on predicted risk probability and partitioning into ten equal-sized deciles, the model displays robust risk-sorting capabilities:
 
-## 💡 Key Business Insights
-1.  **Credit Exposure:** Total credit limit (`total_credit_limit`) and peak utilized outstanding balance (`max_cur_balance_amt`) are the strongest predictors of default risk.
-2.  **Credit-Seeking Intensity:** Recent enquiry velocity (`count_enquiry_recency_90`) indicates active credit hunger and strongly correlates with higher default rates.
-3.  **Repayment Behavior:** Established payment longevity and a clean monthly payment history string are critical markers of lower-risk profiles.
+| Decile | Customers | Bad Customers | Bad Rate | Lift |
+| :---: | :---: | :---: | :---: | :---: |
+| **10 (Highest Risk)** | 478 | 37 | **7.74%** | **1.84x** |
+| **9** | 478 | 37 | **7.74%** | **1.84x** |
+| **8** | 478 | 37 | **7.74%** | **1.84x** |
+| **7** | 478 | 31 | 6.49% | 1.54x |
+| **6** | 478 | 14 | 2.93% | 0.70x |
+| **5** | 478 | 12 | 2.51% | 0.60x |
+| **4** | 478 | 12 | 2.51% | 0.60x |
+| **3** | 478 | 8  | 1.67% | 0.40x |
+| **2** | 478 | 11 | 2.30% | 0.55x |
+| **1 (Lowest Risk)** | 478 | 2  | **0.42%** | **0.10x** |
+
+## 💡 Key Business & Risk Insights
+1.  **Credit Utilization & Exposure:** Total credit limit (`total_credit_limit`) and peak outstanding balance (`max_cur_balance_amt`) are the highest-weighted features in separating default profiles, showcasing risk aggregation.
+2.  **Credit-Seeking Intensity:** Recent enquiry velocity within 90 days (`count_enquiry_recency_90`) indicates active credit hunger, correlating strongly with a high probability of delinquency.
+3.  **Established Payment History:** A clean historical record with a high proportion of months spent in the `0-29 DPD` bucket serves as an essential anchor of low-risk creditworthiness.
+```
